@@ -2,6 +2,7 @@
 road=edges
 distance =weight'''
 
+
 class Graph:
     #when new graph create automatically invoked
     def __init__(self):
@@ -18,6 +19,7 @@ class Graph:
         self.graph[node2].append((node1,distance))   
 
  #give nearest location to current location
-    def get_neighbours(self,node):
-        return self.graph[node]         
+    def get_neighbors(self,node):
+        return self.graph[node]  
 
+  
