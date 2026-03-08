@@ -1,5 +1,6 @@
 import streamlit as st
 import streamlit.components.v1 as components
+import time
 
 from algorithms.graph import Graph
 from algorithms.dijkstra import dijkstra
@@ -7,9 +8,11 @@ from algorithms.visualizer import draw_graph
 
 st.title("Logistics Route Optimization System")
 
-st.info("🔵 Blue roads = Normal roads | 🔴 Red roads = Shortest path")
+st.info("🔵 Blue roads = Normal roads | 🔴 Red roads = Best Route")
 
 traffic = st.slider("Traffic Level", 1.0, 2.0, 1.0)
+
+truck_count = st.slider("Number of Delivery Trucks", 1, 3, 2)
 
 g = Graph()
 
@@ -38,53 +41,78 @@ if st.button("Compute Route"):
         st.error("Source and Destination cannot be the same.")
     else:
 
-        dist1, prev1 = dijkstra(g, warehouse)
+        routes = []
 
-        path1 = []
-        current = source
-        while current is not None:
-            path1.append(current)
-            current = prev1[current]
-        path1.reverse()
+        dist, prev = dijkstra(g, source)
 
-        dist2, prev2 = dijkstra(g, source)
-
-        path2 = []
+        path = []
         current = destination
+
         while current is not None:
-            path2.append(current)
-            current = prev2[current]
-        path2.reverse()
+            path.append(current)
+            current = prev[current]
 
-        full_path = path1 + path2[1:]
+        path.reverse()
 
-        total_distance = dist1[source] + dist2[destination]
+        best_distance = dist[destination]
 
-        avg_speed = 40
-        estimated_time = total_distance / avg_speed
-        estimated_time_minutes = round(estimated_time * 60)
+        routes.append((path, best_distance))
 
-        cost_per_km = 5
-        delivery_cost = total_distance * cost_per_km
+        if truck_count > 1 and len(path) > 2:
+
+            remove_city1 = path[0]
+            remove_city2 = path[1]
+
+            g.graph[remove_city1] = [
+                (n, w) for n, w in g.graph[remove_city1] if n != remove_city2
+            ]
+
+            dist2, prev2 = dijkstra(g, source)
+
+            path2 = []
+            current = destination
+
+            while current is not None:
+                path2.append(current)
+                current = prev2[current]
+
+            path2.reverse()
+
+            alt_distance = dist2[destination]
+
+            routes.append((path2, alt_distance))
+
+        st.subheader("Route Comparison")
+
+        for i, (route, dist) in enumerate(routes):
+
+            route_text = " → ".join(route)
+
+            if i == 0:
+                st.success(f"Truck {i+1} (Best): {route_text} | {dist} km")
+            else:
+                st.write(f"Truck {i+1}: {route_text} | {dist} km")
+
+        best_path = routes[0][0]
 
         edges = []
-        for i in range(len(full_path)-1):
-            edges.append((full_path[i], full_path[i+1]))
+        for i in range(len(best_path) - 1):
+            edges.append((best_path[i], best_path[i + 1]))
 
-        st.subheader("Route Breakdown")
+        st.subheader("Delivery Simulation")
 
-        for i in range(len(full_path)-1):
+        progress_bar = st.progress(0)
+        status = st.empty()
 
-            city1 = full_path[i]
-            city2 = full_path[i+1]
+        for i, city in enumerate(best_path):
 
-            distance = None
-            for neighbor, weight in g.graph[city1]:
-                if neighbor == city2:
-                    distance = weight
-                    break
+            percent = int((i + 1) / len(best_path) * 100)
 
-            st.write(f"{city1} → {city2} : {distance} km")
+            status.write(f"Truck reached: {city}")
+
+            progress_bar.progress(percent)
+
+            time.sleep(0.8)
 
         html_file = draw_graph(g, highlight_path=edges)
 
@@ -92,20 +120,5 @@ if st.button("Compute Route"):
             html = f.read()
 
         st.subheader("Network Map")
+
         components.html(html, height=650)
-
-        st.subheader("Optimal Route")
-
-        route = " → ".join(full_path)
-
-        st.success(f"""
-Warehouse: {warehouse}
-
-Route: {route}
-
-Total Distance: {total_distance} km
-
-Estimated Delivery Time: {estimated_time_minutes} minutes
-
-Delivery Cost: ₹{delivery_cost}
-""")

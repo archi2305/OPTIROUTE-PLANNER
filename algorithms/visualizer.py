@@ -10,7 +10,7 @@ def draw_graph(g, highlight_path=None):
         "Noida": (200, 0),
         "Ghaziabad": (350, 50),
         "Meerut": (500, 0),
-        "Gurgaon": (-150, -100),
+        "Gurgaon": (-150, -120),
         "Faridabad": (150, -120)
     }
 
