@@ -9,6 +9,8 @@ st.title("Logistics Route Optimization System")
 
 st.info("🔵 Blue roads = Normal roads | 🔴 Red roads = Shortest path")
 
+traffic = st.slider("Traffic Level", 1.0, 2.0, 1.0)
+
 g = Graph()
 
 roads = [
@@ -22,7 +24,7 @@ roads = [
 ]
 
 for c1, c2, d in roads:
-    g.add_road(c1, c2, d)
+    g.add_road(c1, c2, int(d * traffic))
 
 cities = list(g.graph.keys())
 
@@ -62,13 +64,16 @@ if st.button("Compute Route"):
         estimated_time = total_distance / avg_speed
         estimated_time_minutes = round(estimated_time * 60)
 
+        cost_per_km = 5
+        delivery_cost = total_distance * cost_per_km
+
         edges = []
-        for i in range(len(full_path) - 1):
+        for i in range(len(full_path)-1):
             edges.append((full_path[i], full_path[i+1]))
 
         st.subheader("Route Breakdown")
 
-        for i in range(len(full_path) - 1):
+        for i in range(len(full_path)-1):
 
             city1 = full_path[i]
             city2 = full_path[i+1]
@@ -101,4 +106,6 @@ Route: {route}
 Total Distance: {total_distance} km
 
 Estimated Delivery Time: {estimated_time_minutes} minutes
+
+Delivery Cost: ₹{delivery_cost}
 """)
