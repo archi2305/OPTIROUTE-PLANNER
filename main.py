@@ -1,7 +1,7 @@
 from algorithms.graph import Graph
 from algorithms.bfs_dfs import bfs, dfs
 from algorithms.scheduler import schedule_deliveries
-
+from algorithms.dijkstra import dijkstra
 from algorithms.delivery import Delivery
 from algorithms.delivery_manager import DeliveryManager
 g=Graph()
@@ -31,3 +31,14 @@ bfs(g, "A")
 
 print("DFS:")
 dfs(g, "A")
+distances = dijkstra(g, "A")
+
+print("Shortest distances from warehouse A:")
+
+for location, distance in distances.items():
+    print(location, ":", distance)
+
+for delivery in manager.deliveries:
+    distance = distances[delivery.destination]
+
+    print(f"Order {delivery.order_id} → {delivery.destination} (Distance {distance})")    
