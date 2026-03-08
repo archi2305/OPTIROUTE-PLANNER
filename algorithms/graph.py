@@ -14,9 +14,16 @@ class Graph:
             self.graph[node]=[]
 
     #add roads from and to node1<->node2
-    def add_road(self,node1,node2,distance):
-        self.graph[node1].append((node2,distance))
-        self.graph[node2].append((node1,distance))   
+    def add_road(self, node1, node2, distance):
+
+        if node1 not in self.graph:
+            self.add_location(node1)
+
+        if node2 not in self.graph:
+            self.add_location(node2)
+
+        self.graph[node1].append((node2, distance))
+        self.graph[node2].append((node1, distance))   
 
  #give nearest location to current location
     def get_neighbors(self,node):

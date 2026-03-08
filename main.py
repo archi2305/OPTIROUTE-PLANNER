@@ -4,6 +4,7 @@ from algorithms.scheduler import schedule_deliveries
 from algorithms.dijkstra import dijkstra
 from algorithms.delivery import Delivery
 from algorithms.delivery_manager import DeliveryManager
+from algorithms.backtracking import validate_routes
 g=Graph()
 manager = DeliveryManager()
 
@@ -42,3 +43,5 @@ for delivery in manager.deliveries:
     distance = distances[delivery.destination]
 
     print(f"Order {delivery.order_id} → {delivery.destination} (Distance {distance})")    
+
+validate_routes(g, "A", manager.deliveries)    
