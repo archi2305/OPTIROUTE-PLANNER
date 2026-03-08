@@ -2,89 +2,103 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from algorithms.graph import Graph
-from algorithms.dijkstra import dijkstra, get_path
+from algorithms.dijkstra import dijkstra
 from algorithms.visualizer import draw_graph
-from algorithms.map_data import load_default_map
 
-st.title(" OptiRoute Planner")
+st.title("Logistics Route Optimization System")
 
+st.info("🔵 Blue roads = Normal roads | 🔴 Red roads = Shortest path")
 
-# GRAPH INITIALIZATION
+g = Graph()
 
+roads = [
+    ("Delhi", "Noida", 20),
+    ("Delhi", "Gurgaon", 15),
+    ("Noida", "Ghaziabad", 10),
+    ("Ghaziabad", "Meerut", 40),
+    ("Gurgaon", "Faridabad", 25),
+    ("Faridabad", "Noida", 30),
+    ("Meerut", "Delhi", 70),
+]
 
-if "graph" not in st.session_state:
-    st.session_state.graph = Graph()
-    load_default_map(st.session_state.graph)
+for c1, c2, d in roads:
+    g.add_road(c1, c2, d)
 
-g = st.session_state.graph
+cities = list(g.graph.keys())
 
+warehouse = st.selectbox("Select Warehouse", cities)
+source = st.selectbox("Select Source Location", cities)
+destination = st.selectbox("Select Destination Location", cities)
 
+if st.button("Compute Route"):
 
-# SHOW AVAILABLE LOCATIONS
+    if source == destination:
+        st.error("Source and Destination cannot be the same.")
+    else:
 
+        dist1, prev1 = dijkstra(g, warehouse)
 
-st.header("Available Locations")
+        path1 = []
+        current = source
+        while current is not None:
+            path1.append(current)
+            current = prev1[current]
+        path1.reverse()
 
-st.write(list(g.graph.keys()))
+        dist2, prev2 = dijkstra(g, source)
 
+        path2 = []
+        current = destination
+        while current is not None:
+            path2.append(current)
+            current = prev2[current]
+        path2.reverse()
 
+        full_path = path1 + path2[1:]
 
-# ROUTE SELECTION
+        total_distance = dist1[source] + dist2[destination]
 
+        avg_speed = 40
+        estimated_time = total_distance / avg_speed
+        estimated_time_minutes = round(estimated_time * 60)
 
-st.header("Route Planner")
+        edges = []
+        for i in range(len(full_path) - 1):
+            edges.append((full_path[i], full_path[i+1]))
 
-warehouse = st.selectbox(
-    "Select Warehouse Location",
-    list(g.graph.keys()),
-    key="warehouse_select"
-)
+        st.subheader("Route Breakdown")
 
-destination = st.selectbox(
-    "Select Delivery Destination",
-    list(g.graph.keys()),
-    key="destination_select"
-)
+        for i in range(len(full_path) - 1):
 
+            city1 = full_path[i]
+            city2 = full_path[i+1]
 
+            distance = None
+            for neighbor, weight in g.graph[city1]:
+                if neighbor == city2:
+                    distance = weight
+                    break
 
-# COMPUTE SHORTEST ROUTE
+            st.write(f"{city1} → {city2} : {distance} km")
 
+        html_file = draw_graph(g, highlight_path=edges)
 
-if st.button("Compute Shortest Route", key="compute_btn"):
+        with open(html_file, "r", encoding="utf-8") as f:
+            html = f.read()
 
-    distances, previous = dijkstra(g, warehouse)
+        st.subheader("Network Map")
+        components.html(html, height=650)
 
-    path = get_path(previous, warehouse, destination)
+        st.subheader("Optimal Route")
 
-    st.subheader("Shortest Route")
+        route = " → ".join(full_path)
 
-    st.write(" → ".join(path))
+        st.success(f"""
+Warehouse: {warehouse}
 
-    st.subheader("Distance")
+Route: {route}
 
-    st.write(distances[destination])
+Total Distance: {total_distance} km
 
-    # highlight path
-    edges = list(zip(path, path[1:]))
-
-    html_file = draw_graph(g, highlight_path=edges)
-
-    HtmlFile = open(html_file, "r", encoding="utf-8")
-
-    components.html(HtmlFile.read(), height=500)
-
-
-
-# NETWORK MAP
-
-
-st.header("City Network")
-
-if st.button("Show Map", key="show_map_btn"):
-
-    html_file = draw_graph(g)
-
-    HtmlFile = open(html_file, "r", encoding="utf-8")
-
-    components.html(HtmlFile.read(), height=500)
+Estimated Delivery Time: {estimated_time_minutes} minutes
+""")
