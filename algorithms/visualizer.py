@@ -6,34 +6,42 @@ def _edge_key(a, b):
     return (a, b) if a <= b else (b, a)
 
 
+def _edges_to_keys(edges):
+    if not edges:
+        return set()
+    return {_edge_key(a, b) for a, b in edges}
+
+
 def draw_graph(
     g,
-    highlight_path=None,
+    selected_route_edges=None,
+    other_routes_edges=None,
     source=None,
     destination=None,
     warehouse=None,
-    height="680px",
+    height="720px",
 ):
     """
-    Render the logistics network. highlight_path: list of (u, v) undirected edge pairs
-    in either orientation.
+    Network map for the logistics graph.
+
+    selected_route_edges: (u, v) pairs for the highlighted truck (bright, thick, red).
+    other_routes_edges: list of edge lists for non-selected truck routes (faded).
+    Unassigned edges: thin, muted background.
     """
     net = Network(
         height=height,
         width="100%",
         directed=False,
-        bgcolor="#0f172a",
+        bgcolor="#0B1A2B",
         font_color="#e2e8f0",
     )
 
-    path_nodes = set()
-    if highlight_path:
-        for u, v in highlight_path:
-            path_nodes.add(u)
-            path_nodes.add(v)
-        path_edge_keys = {_edge_key(a, b) for a, b in highlight_path}
-    else:
-        path_edge_keys = set()
+    selected_keys = _edges_to_keys(selected_route_edges)
+    other_key_sets = [_edges_to_keys(es) for es in (other_routes_edges or []) if es]
+    other_keys = set()
+    for s in other_key_sets:
+        other_keys |= s
+    other_keys -= selected_keys
 
     positions = {
         "Delhi": (0, 0),
@@ -44,30 +52,25 @@ def draw_graph(
         "Faridabad": (150, -120),
     }
 
+    c_wh = "#f97316"
+    c_src = "#22c55e"
+    c_dst = "#a855f7"
+    c_neutral = "#7dd3fc"
+
     for city, (x, y) in positions.items():
         if city not in g.graph:
             continue
 
-        border = "#334155"
-        bg = "#475569"
-        size = 28
+        border = "#1e3a5f"
+        bg = c_neutral
+        size = 26
 
         if city == source:
-            bg = "#059669"
-            border = "#34d399"
-            size = 34
+            bg, border, size = c_src, "#4ade80", 34
         elif city == destination:
-            bg = "#7c3aed"
-            border = "#a78bfa"
-            size = 34
+            bg, border, size = c_dst, "#c4b5fd", 34
         elif warehouse and city == warehouse:
-            bg = "#d97706"
-            border = "#fbbf24"
-            size = 32
-        elif city in path_nodes and highlight_path:
-            bg = "#0ea5e9"
-            border = "#38bdf8"
-            size = 30
+            bg, border, size = c_wh, "#fdba74", 32
 
         net.add_node(
             city,
@@ -76,10 +79,18 @@ def draw_graph(
             y=y,
             physics=False,
             size=size,
-            color={"background": bg, "border": border, "highlight": {"background": bg, "border": "#f8fafc"}},
+            color={
+                "background": bg,
+                "border": border,
+                "highlight": {"background": bg, "border": "#f8fafc"},
+            },
             borderWidth=2,
-            font={"size": 16, "face": "ui-sans-serif, system-ui, sans-serif", "color": "#f8fafc"},
-            title=f"Node: {city}",
+            font={
+                "size": 16,
+                "face": "ui-sans-serif, system-ui, sans-serif",
+                "color": "#f8fafc",
+            },
+            title=city,
         )
 
     seen_edges = set()
@@ -90,34 +101,43 @@ def draw_graph(
                 continue
             seen_edges.add(ek)
 
-            on_path = highlight_path and (ek in path_edge_keys)
+            w_km = int(weight) if float(weight) == int(weight) else weight
+            title = f"Distance: {w_km} km"
 
-            if on_path:
-                color = {"color": "#f43f5e", "highlight": "#fb7185"}
-                width = 4
-            else:
-                color = {"color": "#475569", "highlight": "#64748b"}
+            if selected_route_edges and (ek in selected_keys):
+                color = {"color": "#ff3333", "highlight": "#ff6b6b"}
+                width = 6
+            elif other_keys and (ek in other_keys):
+                color = {"color": "#6b7d96", "highlight": "#94a3b8"}
                 width = 2
+            else:
+                color = {"color": "#334a66", "highlight": "#475569"}
+                width = 1
 
             net.add_edge(
                 city,
                 neighbor,
-                label=f"{weight}",
+                label="" if width == 1 else f"{w_km}",
                 color=color,
                 width=width,
-                title=f"{city} ↔ {neighbor} · {weight} km",
-                font={"size": 12, "color": "#94a3b8", "strokeWidth": 0, "face": "ui-sans-serif, system-ui, sans-serif"},
+                title=title,
+                font={
+                    "size": 12,
+                    "color": "#94a3b8",
+                    "strokeWidth": 0,
+                    "face": "ui-sans-serif, system-ui, sans-serif",
+                },
             )
 
     net.set_options(
         """
     {
       "layout": { "hierarchical": { "enabled": false } },
-      "interaction": { "hover": true, "tooltipDelay": 80, "zoomView": true, "dragView": true },
-      "nodes": { "borderWidth": 2, "shadow": true, "font": { "size": 16, "face": "system-ui" } },
+      "interaction": { "hover": true, "tooltipDelay": 60, "zoomView": true, "dragView": true },
+      "nodes": { "borderWidth": 2, "shadow": true, "font": { "size": 15, "face": "system-ui" } },
       "edges": {
-        "shadow": { "enabled": true, "size": 3 },
-        "smooth": { "type": "continuous", "roundness": 0.45 }
+        "shadow": { "enabled": true, "size": 2 },
+        "smooth": { "type": "continuous", "roundness": 0.4 }
       },
       "physics": { "enabled": false }
     }
