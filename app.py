@@ -8,7 +8,7 @@ from algorithms.graph import Graph
 from algorithms.visualizer import draw_graph
 
 st.set_page_config(
-    page_title="OptiRoute Command Center",
+    page_title="OptiRoute Planner",
     page_icon="🚚",
     layout="wide",
     initial_sidebar_state="collapsed",
