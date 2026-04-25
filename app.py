@@ -20,24 +20,29 @@ st.markdown(
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700&display=swap" rel="stylesheet" />
 <style>
-  .block-container { padding-top: 0.75rem; padding-bottom: 2rem; max-width: 1680px; }
+  /* Full-width main; flex columns need min-width 0 so embedded iframes are not clipped */
+  .block-container { padding-top: 0.35rem; padding-bottom: 0.75rem; max-width: min(100%, 1920px); }
+  div[data-testid="stAppViewContainer"] .main { overflow-x: hidden; }
+  [data-testid="column"] { min-width: 0 !important; }
+  [data-testid="stVerticalBlock"] > div { min-width: 0; }
+  iframe[title="streamlit_embed"] { width: 100% !important; max-width: 100%; }
   h1, h2, h3, p, label { font-family: "Plus Jakarta Sans", system-ui, sans-serif !important; }
-  .or-title { font-size: 1.75rem; font-weight: 700; letter-spacing: -0.03em; color: #0f172a; margin: 0; }
-  .or-sub { color: #64748b; font-size: 0.95rem; margin: 0.25rem 0 0.75rem; }
+  .or-title { font-size: 1.45rem; font-weight: 700; letter-spacing: -0.03em; color: #0f172a; margin: 0; }
+  .or-sub { color: #64748b; font-size: 0.85rem; margin: 0.15rem 0 0.4rem; line-height: 1.35; }
   .or-badge {
     display: inline-block; background: linear-gradient(135deg, #0d9488, #0ea5e9); color: #fff;
     font-size: 0.65rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
     padding: 0.25rem 0.5rem; border-radius: 6px; margin-right: 0.5rem; vertical-align: middle;
   }
-  .kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.85rem; margin: 0.4rem 0 1.1rem; }
+  .kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5rem; margin: 0.15rem 0 0.45rem; }
   @media (max-width: 1100px) { .kpi-row { grid-template-columns: repeat(2, 1fr); } }
   .kpi-card {
-    background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 1rem 1.1rem;
-    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.07);
+    background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 0.55rem 0.75rem;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
   }
-  .kpi-emoji { font-size: 1.25rem; line-height: 1; }
-  .kpi-t { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; margin: 0.4rem 0 0.2rem; }
-  .kpi-v { font-size: 1.4rem; font-weight: 700; color: #0f172a; }
+  .kpi-emoji { font-size: 1.05rem; line-height: 1; }
+  .kpi-t { font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.05em; color: #64748b; margin: 0.25rem 0 0.1rem; }
+  .kpi-v { font-size: 1.15rem; font-weight: 700; color: #0f172a; }
   .map-legend { font-size: 0.8rem; color: #334155; background: #f1f5f9; border: 1px solid #e2e8f0; border-radius: 10px; padding: 0.45rem 0.7rem; margin: 0 0 0.4rem; }
   .rc-best { border-left: 4px solid #22c55e; background: #f0fdf4; border-radius: 10px; padding: 0.9rem 1rem; border: 1px solid #bbf7d0; margin: 0.5rem 0; }
   .rc-alt { border: 1px solid #e2e8f0; border-radius: 10px; padding: 0.9rem 1rem; background: #fff; margin: 0.5rem 0; }
@@ -57,9 +62,9 @@ if "pending_sim" not in st.session_state:
     st.session_state.pending_sim = False
 if "replay_sim" not in st.session_state:
     st.session_state.replay_sim = False
-if "fleet_sz" not in st.session_state:
-    st.session_state.fleet_sz = 2
 
+
+MAP_IFRAME_HEIGHT = 560
 
 def build_graph(traffic: float) -> Graph:
     g = Graph()
@@ -102,7 +107,7 @@ def kpi_value(routes, fleet_size_session: int, speed_kmh: float = 40.0):
 
 
 rts0 = st.session_state.routes_result
-f_sz = int(st.session_state.get("fleet_sz", 2))
+f_sz = int(st.session_state.get("fleet_sz", 2))  # set by slider key only; default for first paint
 k0 = kpi_value(rts0, f_sz)
 dist_s0 = f"{k0['dist']:.0f} km" if k0["dist"] is not None else "—"
 time_s0 = f"{k0['time_h']:.1f} h" if k0["time_h"] is not None else "—"
@@ -115,7 +120,7 @@ st.markdown(
   <span class="or-badge">Live ops</span>
   <span class="or-title">Logistics control dashboard</span>
 </p>
-<p class="or-sub">Fleet routing on the NCR network — Dijkstra shortest path, per-truck map highlights, and live delivery steps.</p>
+<p class="or-sub">NCR network · Dijkstra · Per-truck map · Live steps</p>
 """,
     unsafe_allow_html=True,
 )
@@ -147,8 +152,6 @@ st.markdown(
 """,
     unsafe_allow_html=True,
 )
-
-st.markdown("<br/>", unsafe_allow_html=True)
 
 c_left, c_mid, c_right = st.columns([0.88, 1.55, 0.9], gap="large")
 
@@ -231,7 +234,6 @@ with c_mid:
         """,
         unsafe_allow_html=True,
     )
-    st.markdown("<br/>", unsafe_allow_html=True)
     if el_list and rts and len(rts) == len(el_list):
         h = max(0, min(int(highlight_idx), len(rts) - 1))
         sel_edges = el_list[h]
@@ -246,11 +248,17 @@ with c_mid:
         source=source,
         destination=destination,
         warehouse=warehouse,
+        height=f"{MAP_IFRAME_HEIGHT}px",
     )
     with open(html_file, "r", encoding="utf-8") as f:
         map_html = f.read()
-    components.html(map_html, height=700, scrolling=True)
-    st.caption("Hover an edge to see: Distance: X km")
+    components.html(
+        map_html,
+        width=None,
+        height=MAP_IFRAME_HEIGHT,
+        scrolling=True,
+    )
+    st.caption("Scroll inside the map if needed · Hover edges: Distance: X km")
 
 with c_right:
     st.markdown('<p class="sec-t">Routes &amp; performance</p>', unsafe_allow_html=True)
@@ -288,27 +296,26 @@ with c_right:
     else:
         st.info("Run **Compute routes** to see routes, times, and map highlights.")
 
-st.markdown("<br/>", unsafe_allow_html=True)
 if (st.session_state.get("pending_sim") or st.session_state.get("replay_sim")) and st.session_state.routes_result:
     st.session_state.pending_sim = False
     st.session_state.replay_sim = False
-    st.markdown('<p class="sec-t">Live delivery simulation</p>', unsafe_allow_html=True)
-    st.caption("Animates the highlighted truck’s route. Use 0.65 s per stop — adjust the pause in the code to taste.")
-    rts_sim = st.session_state.routes_result
-    tidx = 0
-    if rts_sim and len(rts_sim) > 1 and "truck_hl" in st.session_state:
-        tidx = int(st.session_state["truck_hl"])
-    tidx = max(0, min(tidx, len(rts_sim) - 1))
-    sim_path = rts_sim[tidx][0]
-    nst = len(sim_path)
-    bar = st.progress(0, text="Preparing run…")
-    line = st.empty()
-    for i, city in enumerate(sim_path):
-        line.markdown(
-            f"🚚 Truck {tidx + 1} reached **{city}**  —  step {i + 1} of {nst}"
-        )
-        bar.progress((i + 1) / nst, text=f"Progress: {i + 1}/{nst} — {city}")
-        time.sleep(0.65)
-    bar.progress(1.0, text="Arrived at destination")
-    line.empty()
-    st.success(f"Leg complete. Truck {tidx + 1} path: {' → '.join(sim_path)}")
+    with st.expander("Live delivery simulation", expanded=True):
+        st.caption("Follows the highlighted truck (or Truck 1 if only one route). 0.65 s per stop.")
+        rts_sim = st.session_state.routes_result
+        tidx = 0
+        if rts_sim and len(rts_sim) > 1 and "truck_hl" in st.session_state:
+            tidx = int(st.session_state["truck_hl"])
+        tidx = max(0, min(tidx, len(rts_sim) - 1))
+        sim_path = rts_sim[tidx][0]
+        nst = len(sim_path)
+        bar = st.progress(0, text="Preparing run…")
+        line = st.empty()
+        for i, city in enumerate(sim_path):
+            line.markdown(
+                f"🚚 Truck {tidx + 1} reached **{city}**  —  step {i + 1} of {nst}"
+            )
+            bar.progress((i + 1) / nst, text=f"Progress: {i + 1}/{nst} — {city}")
+            time.sleep(0.65)
+        bar.progress(1.0, text="Arrived at destination")
+        line.empty()
+        st.success(f"Leg complete. Truck {tidx + 1} path: {' → '.join(sim_path)}")
