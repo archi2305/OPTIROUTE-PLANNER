@@ -8,8 +8,8 @@ from algorithms.graph import Graph
 from algorithms.visualizer import draw_graph
 
 st.set_page_config(
-    page_title="OptiRoute · Command Center",
-    page_icon="⬡",
+    page_title="OptiRoute Command Center",
+    page_icon="🚚",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
@@ -21,19 +21,19 @@ st.markdown(
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700&display=swap" rel="stylesheet" />
 <style>
   /* Full-width main; flex columns need min-width 0 so embedded iframes are not clipped */
-  .block-container { padding-top: 0.35rem; padding-bottom: 0.75rem; max-width: min(100%, 1920px); }
+  .block-container { padding-top: 0.5rem; padding-bottom: 0.75rem; max-width: min(100%, 1920px); }
   div[data-testid="stAppViewContainer"] .main { overflow-x: hidden; }
   [data-testid="column"] { min-width: 0 !important; }
   [data-testid="stVerticalBlock"] > div { min-width: 0; }
   iframe[title="streamlit_embed"] { width: 100% !important; max-width: 100%; }
   h1, h2, h3, p, label { font-family: "Plus Jakarta Sans", system-ui, sans-serif !important; }
-  .or-title { font-size: 1.45rem; font-weight: 700; letter-spacing: -0.03em; color: #0f172a; margin: 0; }
-  .or-sub { color: #64748b; font-size: 0.85rem; margin: 0.15rem 0 0.4rem; line-height: 1.35; }
-  .or-badge {
-    display: inline-block; background: linear-gradient(135deg, #0d9488, #0ea5e9); color: #fff;
-    font-size: 0.65rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
-    padding: 0.25rem 0.5rem; border-radius: 6px; margin-right: 0.5rem; vertical-align: middle;
+  .or-header-wrap { padding: 0.5rem 0 0.1rem; margin: 0 0 0.2rem; }
+  .or-header-title {
+    font-size: 1.85rem; font-weight: 700; letter-spacing: -0.03em; color: #0f172a !important;
+    margin: 0; line-height: 1.2;
   }
+  .or-header-sub { color: #64748b; font-size: 0.95rem; margin: 0.5rem 0 0.85rem; line-height: 1.45; }
+  .or-header-hr { border: none; border-top: 1px solid #e2e8f0; margin: 0.25rem 0 0.6rem; }
   .kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5rem; margin: 0.15rem 0 0.45rem; }
   @media (max-width: 1100px) { .kpi-row { grid-template-columns: repeat(2, 1fr); } }
   .kpi-card {
@@ -62,6 +62,17 @@ if "pending_sim" not in st.session_state:
     st.session_state.pending_sim = False
 if "replay_sim" not in st.session_state:
     st.session_state.replay_sim = False
+
+st.markdown(
+    """
+<div class="or-header-wrap">
+  <h1 class="or-header-title">🚚 OptiRoute Command Center</h1>
+  <p class="or-header-sub">Real-time logistics routing • Multi-truck simulation • Smart optimization</p>
+  <hr class="or-header-hr" />
+</div>
+    """,
+    unsafe_allow_html=True,
+)
 
 
 MAP_IFRAME_HEIGHT = 560
@@ -113,17 +124,6 @@ dist_s0 = f"{k0['dist']:.0f} km" if k0["dist"] is not None else "—"
 time_s0 = f"{k0['time_h']:.1f} h" if k0["time_h"] is not None else "—"
 stops_s0 = f"{k0['stops']}" if rts0 else "—"
 truck_s0 = str(k0["trucks"])
-
-st.markdown(
-    """
-<p style="margin:0.25rem 0 0.5rem">
-  <span class="or-badge">Live ops</span>
-  <span class="or-title">Logistics control dashboard</span>
-</p>
-<p class="or-sub">NCR network · Dijkstra · Per-truck map · Live steps</p>
-""",
-    unsafe_allow_html=True,
-)
 
 st.markdown(
     f"""
