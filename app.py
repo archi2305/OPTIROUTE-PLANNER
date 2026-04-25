@@ -1,9 +1,10 @@
 import time
+from typing import Optional, Tuple
 
 import streamlit as st
 import streamlit.components.v1 as components
 
-from algorithms.dijkstra import dijkstra
+from algorithms.dijkstra import dijkstra, get_path
 from algorithms.graph import Graph
 from algorithms.visualizer import draw_graph
 
@@ -93,6 +94,104 @@ def build_graph(traffic: float) -> Graph:
     return g
 
 
+def clone_graph(g: Graph) -> Graph:
+    h = Graph()
+    seen = set()
+    for a in g.graph:
+        for b, w in g.graph[a]:
+            t = (a, b) if a <= b else (b, a)
+            if t in seen:
+                continue
+            seen.add(t)
+            h.add_road(t[0], t[1], w)
+    return h
+
+
+def remove_undirected_edge(g: Graph, u: str, v: str) -> None:
+    g.graph[u] = [(n, w) for n, w in g.graph[u] if n != v]
+    g.graph[v] = [(n, w) for n, w in g.graph[v] if n != u]
+
+
+def _multiply_edge_weight_in_place(g: Graph, u: str, v: str, factor: float) -> None:
+    def scale(w):
+        return int(round(w * factor))
+
+    g.graph[u] = [(n, scale(w) if n == v else w) for n, w in g.graph[u]]
+    g.graph[v] = [(n, scale(w) if n == u else w) for n, w in g.graph[v]]
+
+
+def path_key(path: list) -> tuple:
+    return tuple(path)
+
+
+def find_next_distinct_route(
+    g_base: Graph,
+    source: str,
+    dest: str,
+    avoid_paths: list,
+) -> Optional[Tuple[list, float]]:
+    """A route different from every path in avoid_paths; original graph is never modified."""
+    best: tuple[list, float] | None = None
+    best_d = float("inf")
+    for ref in avoid_paths:
+        for i in range(len(ref) - 1):
+            u, v = ref[i], ref[i + 1]
+            g2 = clone_graph(g_base)
+            remove_undirected_edge(g2, u, v)
+            d2, pr2 = dijkstra(g2, source)
+            if d2[dest] == float("inf"):
+                continue
+            p2 = get_path(pr2, source, dest)
+            if not p2 or p2[0] != source:
+                continue
+            if any(path_key(p2) == path_key(a) for a in avoid_paths):
+                continue
+            if d2[dest] < best_d:
+                best_d = d2[dest]
+                best = (p2, d2[dest])
+    if best is not None:
+        return best
+    for ref in avoid_paths:
+        for i in range(len(ref) - 1):
+            u, v = ref[i], ref[i + 1]
+            g2 = clone_graph(g_base)
+            _multiply_edge_weight_in_place(g2, u, v, 40.0)
+            d2, pr2 = dijkstra(g2, source)
+            if d2[dest] == float("inf"):
+                continue
+            p2 = get_path(pr2, source, dest)
+            if not p2 or p2[0] != source:
+                continue
+            if any(path_key(p2) == path_key(a) for a in avoid_paths):
+                continue
+            if d2[dest] < best_d:
+                best_d = d2[dest]
+                best = (p2, d2[dest])
+    return best
+
+
+def compute_fleet_routes(g: Graph, source: str, dest: str, n_trucks: int) -> list:
+    dist, prev = dijkstra(g, source)
+    if dist[dest] == float("inf"):
+        return []
+    p0 = get_path(prev, source, dest)
+    if not p0 or p0[0] != source:
+        return []
+    d0 = dist[dest]
+    out = [(p0, d0)]
+    if n_trucks < 2:
+        return out
+    avoid: list = [p0]
+    for _ in range(1, n_trucks):
+        nxt = find_next_distinct_route(g, source, dest, avoid)
+        if nxt is None:
+            break
+        p_new, d_new = nxt
+        out.append((p_new, d_new))
+        avoid.append(p_new)
+    return out
+
+
 def path_to_edges(path: list) -> list:
     if len(path) < 2:
         return []
@@ -162,6 +261,15 @@ with c_left:
     g = build_graph(traffic)
     cities = list(g.graph.keys())
     truck_count = st.slider("Fleet size (trucks)", 1, 3, 2, key="fleet_sz")
+    sim_step = st.slider(
+        "Simulation speed (seconds per stop)",
+        0.3,
+        2.0,
+        1.0,
+        0.1,
+        key="sim_step_sec",
+        help="Slower = easier to read each step. Used for live delivery animation.",
+    )
     st.markdown("**Locations**", unsafe_allow_html=True)
     warehouse = st.selectbox("Warehouse", cities, index=0)
     source = st.selectbox("Source", cities, index=0)
@@ -176,31 +284,21 @@ with c_left:
             st.session_state.routes_result = None
             st.session_state.route_edges_list = None
         else:
-            routes: list = []
-            dist, prev = dijkstra(g, source)
-            path: list = []
-            cur = destination
-            while cur is not None:
-                path.append(cur)
-                cur = prev[cur]
-            d_best = dist[destination]
-            routes.append((path, d_best))
-            g2 = build_graph(traffic)
-            if truck_count > 1 and len(path) > 2:
-                r1, r2 = path[0], path[1]
-                g2.graph[r1] = [(n, w) for n, w in g2.graph[r1] if n != r2]
-                d2, pr2 = dijkstra(g2, source)
-                p2: list = []
-                c2 = destination
-                while c2 is not None:
-                    p2.append(c2)
-                    c2 = pr2[c2]
-                p2.reverse()
-                routes.append((p2, d2[destination]))
-            st.session_state.routes_result = routes
-            st.session_state.route_edges_list = [path_to_edges(p) for p, _d in routes]
-            st.session_state.pending_sim = True
-            st.rerun()
+            routes = compute_fleet_routes(g, source, destination, truck_count)
+            if not routes:
+                st.error("No valid route found between source and destination.")
+                st.session_state.routes_result = None
+                st.session_state.route_edges_list = None
+            else:
+                if truck_count > 1 and len(routes) < truck_count:
+                    st.warning(
+                        f"Only {len(routes)} distinct route(s) could be found for this pair. "
+                        "Some areas may be bridges with no second path."
+                    )
+                st.session_state.routes_result = routes
+                st.session_state.route_edges_list = [path_to_edges(p) for p, _d in routes]
+                st.session_state.pending_sim = True
+                st.rerun()
 
 # Refresh derived state
 rts = st.session_state.routes_result
@@ -268,13 +366,14 @@ with c_right:
         for i, (path_nodes, d_km) in enumerate(rts):
             line = " → ".join(path_nodes)
             t_h = d_km / 40.0
+            role = "Truck 1 (Best)" if i == 0 else f"Truck {i + 1} (Alternative)"
             if i == 0:
                 st.markdown(
                     f"""
 <div class="rc-best">
-  <div class="rc-t">Truck {i + 1} (best)</div>
+  <div class="rc-t">{role}</div>
   <div class="rc-path">{line}</div>
-  <p style="margin:0.5rem 0 0; font-size:0.86rem; color:#166534">Distance: <b>{d_km} km</b> · Est. time: <b>{t_h:.1f} h</b> @ 40 km/h</p>
+  <p style="margin:0.5rem 0 0; font-size:0.86rem; color:#166534">Total distance: <b>{d_km} km</b> · Est. time: <b>{t_h:.1f} h</b> @ 40 km/h</p>
 </div>
                     """,
                     unsafe_allow_html=True,
@@ -283,9 +382,9 @@ with c_right:
                 st.markdown(
                     f"""
 <div class="rc-alt">
-  <div class="rc-t">Truck {i + 1} (alternative)</div>
+  <div class="rc-t">{role}</div>
   <div class="rc-path">{line}</div>
-  <p style="margin:0.5rem 0 0; font-size:0.86rem; color:#334155">Distance: <b>{d_km} km</b> · Est. time: <b>{t_h:.1f} h</b> @ 40 km/h</p>
+  <p style="margin:0.5rem 0 0; font-size:0.86rem; color:#334155">Total distance: <b>{d_km} km</b> · Est. time: <b>{t_h:.1f} h</b> @ 40 km/h</p>
 </div>
                     """,
                     unsafe_allow_html=True,
@@ -300,7 +399,11 @@ if (st.session_state.get("pending_sim") or st.session_state.get("replay_sim")) a
     st.session_state.pending_sim = False
     st.session_state.replay_sim = False
     with st.expander("Live delivery simulation", expanded=True):
-        st.caption("Follows the highlighted truck (or Truck 1 if only one route). 0.65 s per stop.")
+        step_sec = float(st.session_state.get("sim_step_sec", 1.0))
+        st.caption(
+            f"Follows the highlighted truck on the map (or Truck 1 if a single route). "
+            f"Interval: {step_sec:.1f} s per stop (set under Controls)."
+        )
         rts_sim = st.session_state.routes_result
         tidx = 0
         if rts_sim and len(rts_sim) > 1 and "truck_hl" in st.session_state:
@@ -315,7 +418,7 @@ if (st.session_state.get("pending_sim") or st.session_state.get("replay_sim")) a
                 f"🚚 Truck {tidx + 1} reached **{city}**  —  step {i + 1} of {nst}"
             )
             bar.progress((i + 1) / nst, text=f"Progress: {i + 1}/{nst} — {city}")
-            time.sleep(0.65)
+            time.sleep(step_sec)
         bar.progress(1.0, text="Arrived at destination")
         line.empty()
         st.success(f"Leg complete. Truck {tidx + 1} path: {' → '.join(sim_path)}")
