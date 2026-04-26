@@ -8,6 +8,7 @@ from algorithms.dijkstra import dijkstra, get_path
 from algorithms.graph import Graph
 from algorithms.visualizer import draw_graph
 
+# Basic Streamlit page setup.
 st.set_page_config(
     page_title="OptiRoute Planner",
     page_icon="🚚",
@@ -15,6 +16,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
+# Global UI styling for dashboard look and layout behavior.
 st.markdown(
     """
 <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -54,6 +56,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# Session defaults so reruns keep route/map/simulation state.
 if "routes_result" not in st.session_state:
     st.session_state.routes_result = None
 if "route_edges_list" not in st.session_state:
@@ -77,6 +80,7 @@ st.markdown(
 
 MAP_IFRAME_HEIGHT = 560
 
+# Build a weighted city graph; traffic scales all road costs.
 def build_graph(traffic: float) -> Graph:
     g = Graph()
     roads = [
@@ -93,6 +97,7 @@ def build_graph(traffic: float) -> Graph:
     return g
 
 
+# Clone graph safely so route experiments do not mutate the original.
 def clone_graph(g: Graph) -> Graph:
     h = Graph()
     seen = set()
@@ -106,11 +111,13 @@ def clone_graph(g: Graph) -> Graph:
     return h
 
 
+# Remove one undirected edge from both adjacency lists.
 def remove_undirected_edge(g: Graph, u: str, v: str) -> None:
     g.graph[u] = [(n, w) for n, w in g.graph[u] if n != v]
     g.graph[v] = [(n, w) for n, w in g.graph[v] if n != u]
 
 
+# Temporarily penalize an edge to force alternate route discovery.
 def _multiply_edge_weight_in_place(g: Graph, u: str, v: str, factor: float) -> None:
     def scale(w):
         return int(round(w * factor))
@@ -119,6 +126,7 @@ def _multiply_edge_weight_in_place(g: Graph, u: str, v: str, factor: float) -> N
     g.graph[v] = [(n, scale(w) if n == u else w) for n, w in g.graph[v]]
 
 
+# Hashable route form for quick path equality checks.
 def path_key(path: list) -> tuple:
     return tuple(path)
 
@@ -132,6 +140,7 @@ def find_next_distinct_route(
     """A route different from every path in avoid_paths; original graph is never modified."""
     best: tuple[list, float] | None = None
     best_d = float("inf")
+    # Pass 1: try removing one edge from known routes.
     for ref in avoid_paths:
         for i in range(len(ref) - 1):
             u, v = ref[i], ref[i + 1]
@@ -150,6 +159,7 @@ def find_next_distinct_route(
                 best = (p2, d2[dest])
     if best is not None:
         return best
+    # Pass 2: if removal fails, heavily penalize shared edges.
     for ref in avoid_paths:
         for i in range(len(ref) - 1):
             u, v = ref[i], ref[i + 1]
@@ -169,6 +179,7 @@ def find_next_distinct_route(
     return best
 
 
+# Primary route first, then add distinct alternatives for extra trucks.
 def compute_fleet_routes(g: Graph, source: str, dest: str, n_trucks: int) -> list:
     dist, prev = dijkstra(g, source)
     if dist[dest] == float("inf"):
@@ -191,12 +202,14 @@ def compute_fleet_routes(g: Graph, source: str, dest: str, n_trucks: int) -> lis
     return out
 
 
+# Convert node path into edge pairs for map highlighting.
 def path_to_edges(path: list) -> list:
     if len(path) < 2:
         return []
     return [(path[i], path[i + 1]) for i in range(len(path) - 1)]
 
 
+# KPI payload shown in the top cards.
 def kpi_value(routes, fleet_size_session: int, speed_kmh: float = 40.0):
     if routes and len(routes) > 0:
         p0, d0 = routes[0]
@@ -215,6 +228,7 @@ def kpi_value(routes, fleet_size_session: int, speed_kmh: float = 40.0):
     }
 
 
+# Compute top-card values from current session state.
 rts0 = st.session_state.routes_result
 f_sz = int(st.session_state.get("fleet_sz", 2))
 k0 = kpi_value(rts0, f_sz)
@@ -223,6 +237,7 @@ time_s0 = f"{k0['time_h']:.1f} h" if k0["time_h"] is not None else "—"
 stops_s0 = f"{k0['stops']}" if rts0 else "—"
 truck_s0 = str(k0["trucks"])
 
+# KPI row at the top of the dashboard.
 st.markdown(
     f"""
 <div class="kpi-row">
@@ -251,9 +266,11 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# Three-column layout: controls, map, and route details.
 c_left, c_mid, c_right = st.columns([0.88, 1.55, 0.9], gap="large")
 
 with c_left:
+    # Left panel: controls and route computation trigger.
     st.markdown('<p class="sec-t">Controls</p>', unsafe_allow_html=True)
     st.divider()
     traffic = st.slider("Traffic load", 1.0, 2.0, 1.0, 0.05, help="Scales all road weights.")
@@ -276,6 +293,7 @@ with c_left:
     st.caption("Recompute after changing traffic or locations.")
     run = st.button("Compute routes", type="primary", use_container_width=True)
     if run:
+        # Reset simulation flags for a fresh run.
         st.session_state.pending_sim = False
         st.session_state.replay_sim = False
         if source == destination:
@@ -289,6 +307,7 @@ with c_left:
                 st.session_state.routes_result = None
                 st.session_state.route_edges_list = None
             else:
+                # Warn when graph topology cannot provide enough unique paths.
                 if truck_count > 1 and len(routes) < truck_count:
                     st.warning(
                         f"Only {len(routes)} distinct route(s) could be found for this pair. "
@@ -299,11 +318,13 @@ with c_left:
                 st.session_state.pending_sim = True
                 st.rerun()
 
+# Derived view state reused across middle and right panels.
 rts = st.session_state.routes_result
 el_list = st.session_state.route_edges_list
 n_r = len(rts) if rts else 0
 
 with c_mid:
+    # Middle panel: interactive map with route highlighting.
     st.markdown('<p class="sec-t">Network map</p>', unsafe_allow_html=True)
     st.divider()
     highlight_idx = 0
@@ -331,6 +352,7 @@ with c_mid:
         unsafe_allow_html=True,
     )
     if el_list and rts and len(rts) == len(el_list):
+        # Keep highlight index safe even if UI state gets stale.
         h = max(0, min(int(highlight_idx), len(rts) - 1))
         sel_edges = el_list[h]
         other_edges = [el_list[j] for j in range(len(el_list)) if j != h]
@@ -357,6 +379,7 @@ with c_mid:
     st.caption("Scroll inside the map if needed · Hover edges: Distance: X km")
 
 with c_right:
+    # Right panel: route cards and quick performance comparison.
     st.markdown('<p class="sec-t">Routes &amp; performance</p>', unsafe_allow_html=True)
     st.divider()
     if rts and el_list:
@@ -366,6 +389,7 @@ with c_right:
             t_h = d_km / 40.0
             role = "Truck 1 (Best)" if i == 0 else f"Truck {i + 1} (Alternative)"
             if i == 0:
+                # Best route gets visual emphasis.
                 st.markdown(
                     f"""
 <div class="rc-best">
@@ -393,6 +417,7 @@ with c_right:
     else:
         st.info("Run **Compute routes** to see routes, times, and map highlights.")
 
+# Bottom expander: simple step-by-step route playback.
 if (st.session_state.get("pending_sim") or st.session_state.get("replay_sim")) and st.session_state.routes_result:
     st.session_state.pending_sim = False
     st.session_state.replay_sim = False
@@ -406,6 +431,7 @@ if (st.session_state.get("pending_sim") or st.session_state.get("replay_sim")) a
         tidx = 0
         if rts_sim and len(rts_sim) > 1 and "truck_hl" in st.session_state:
             tidx = int(st.session_state["truck_hl"])
+        # Guard against out-of-range highlight values after reruns.
         tidx = max(0, min(tidx, len(rts_sim) - 1))
         sim_path = rts_sim[tidx][0]
         nst = len(sim_path)
