@@ -21,13 +21,7 @@ def draw_graph(
     warehouse=None,
     height="720px",
 ):
-    """
-    Network map for the logistics graph.
-
-    selected_route_edges: (u, v) pairs for the highlighted truck (bright, thick, red).
-    other_routes_edges: list of edge lists for non-selected truck routes (faded).
-    Unassigned edges: thin, muted background.
-    """
+    # Build an interactive city network map.
     net = Network(
         height=height,
         width="100%",
@@ -43,6 +37,7 @@ def draw_graph(
         other_keys |= s
     other_keys -= selected_keys
 
+    # Fixed coordinates keep the map layout stable across reruns.
     positions = {
         "Delhi": (0, 0),
         "Noida": (200, 0),
@@ -93,6 +88,7 @@ def draw_graph(
             title=city,
         )
 
+    # Track undirected edges so each road is drawn once.
     seen_edges = set()
     for city in g.graph:
         for neighbor, weight in g.graph[city]:

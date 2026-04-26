@@ -1,7 +1,7 @@
 import heapq
 
 def dijkstra(graph, start):
-
+    # Standard min-heap Dijkstra over adjacency list graph.
     distances = {node: float("inf") for node in graph.graph}
     previous = {node: None for node in graph.graph}
 
@@ -28,7 +28,7 @@ def dijkstra(graph, start):
 
 
 def get_path(previous, start, end):
-
+    # Walk backwards from destination, then reverse.
     path = []
 
     current = end

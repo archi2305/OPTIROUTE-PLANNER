@@ -21,7 +21,7 @@ st.markdown(
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700&display=swap" rel="stylesheet" />
 <style>
-  /* Full-width main; flex columns need min-width 0 so embedded iframes are not clipped */
+  /* Keep map iframes from getting clipped in columns. */
   .block-container { padding-top: 0.5rem; padding-bottom: 0.75rem; max-width: min(100%, 1920px); }
   div[data-testid="stAppViewContainer"] .main { overflow-x: hidden; }
   [data-testid="column"] { min-width: 0 !important; }
@@ -217,7 +217,7 @@ def kpi_value(routes, fleet_size_session: int, speed_kmh: float = 40.0):
 
 
 rts0 = st.session_state.routes_result
-f_sz = int(st.session_state.get("fleet_sz", 2))  # set by slider key only; default for first paint
+f_sz = int(st.session_state.get("fleet_sz", 2))  # Slider default before first compute.
 k0 = kpi_value(rts0, f_sz)
 dist_s0 = f"{k0['dist']:.0f} km" if k0["dist"] is not None else "—"
 time_s0 = f"{k0['time_h']:.1f} h" if k0["time_h"] is not None else "—"
@@ -300,7 +300,7 @@ with c_left:
                 st.session_state.pending_sim = True
                 st.rerun()
 
-# Refresh derived state
+# Refresh view state after controls update.
 rts = st.session_state.routes_result
 el_list = st.session_state.route_edges_list
 n_r = len(rts) if rts else 0

@@ -1,19 +1,14 @@
-'''location/city=node
-road=edges
-distance =weight'''
-
-
 class Graph:
-    #when new graph create automatically invoked
+    # Simple adjacency list: city -> [(neighbor, distance), ...]
     def __init__(self):
         self.graph={}
 
-    #add location
+    # Add a city only once.
     def add_location(self,node):
         if node not in self.graph:
             self.graph[node]=[]
 
-    #add roads from and to node1<->node2
+    # Roads are undirected, so store both directions.
     def add_road(self, node1, node2, distance):
 
         if node1 not in self.graph:
@@ -25,7 +20,7 @@ class Graph:
         self.graph[node1].append((node2, distance))
         self.graph[node2].append((node1, distance))   
 
- #give nearest location to current location
+    # Return all direct neighbors for a city.
     def get_neighbors(self,node):
         return self.graph[node]  
 
