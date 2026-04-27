@@ -1,13 +1,10 @@
 import time
-from difflib import get_close_matches
 from typing import Optional, Tuple
 
 import streamlit as st
 import streamlit.components.v1 as components
 import geonamescache
 from geopy.distance import geodesic
-from geopy.exc import GeopyError
-from geopy.geocoders import Nominatim
 
 from algorithms.dijkstra import dijkstra, get_path
 from algorithms.graph import Graph
@@ -70,6 +67,12 @@ if "pending_sim" not in st.session_state:
     st.session_state.pending_sim = False
 if "replay_sim" not in st.session_state:
     st.session_state.replay_sim = False
+if "graph_edges_snapshot" not in st.session_state:
+    st.session_state.graph_edges_snapshot = None
+if "display_route_distances" not in st.session_state:
+    st.session_state.display_route_distances = None
+if "traffic_used" not in st.session_state:
+    st.session_state.traffic_used = 1.0
 
 st.markdown(
     """
@@ -133,7 +136,7 @@ def _looks_like_partial_coordinate(value: str) -> bool:
 
 
 @st.cache_data(show_spinner=False)
-def build_india_location_index() -> tuple[dict[str, tuple[float, float]], list[str]]:
+def build_india_location_index() -> dict[str, tuple[float, float]]:
     gc = geonamescache.GeonamesCache()
     cities = gc.get_cities()
     names_to_coords: dict[str, tuple[float, float]] = {}
@@ -159,40 +162,15 @@ def build_india_location_index() -> tuple[dict[str, tuple[float, float]], list[s
                 names_to_coords[alias] = (lat, lon)
     for base_name, base_coords in BASE_CITY_COORDS.items():
         names_to_coords.setdefault(base_name.lower(), base_coords)
-    return names_to_coords, list(names_to_coords.keys())
+    return names_to_coords
 
 
 def geocode_from_offline_india_index(location: str) -> Optional[Tuple[float, float]]:
     query = _normalize_city_name(location).lower()
     if not query:
         return None
-    names_to_coords, keys = build_india_location_index()
-    exact = names_to_coords.get(query)
-    if exact is not None:
-        return exact
-    near = get_close_matches(query, keys, n=1, cutoff=0.86)
-    if near:
-        return names_to_coords.get(near[0])
-    return None
-
-
-@st.cache_resource(show_spinner=False)
-def get_geolocator() -> Nominatim:
-    return Nominatim(user_agent="optiroute_planner_app")
-
-
-@st.cache_data(show_spinner=False)
-def geocode_india_location(location: str) -> Optional[Tuple[float, float]]:
-    geolocator = get_geolocator()
-    loc = geolocator.geocode(f"{location}, India", exactly_one=True, timeout=10)
-    if loc is None:
-        return None
-    if not (
-        INDIA_BOUNDS["min_lat"] <= loc.latitude <= INDIA_BOUNDS["max_lat"]
-        and INDIA_BOUNDS["min_lon"] <= loc.longitude <= INDIA_BOUNDS["max_lon"]
-    ):
-        return None
-    return (loc.latitude, loc.longitude)
+    names_to_coords = build_india_location_index()
+    return names_to_coords.get(query)
 
 
 def safe_geocode_india_location(location: str) -> tuple[Optional[Tuple[float, float]], Optional[str]]:
@@ -204,28 +182,27 @@ def safe_geocode_india_location(location: str) -> tuple[Optional[Tuple[float, fl
     offline_coords = geocode_from_offline_india_index(location)
     if offline_coords is not None:
         return offline_coords, None
-    try:
-        return geocode_india_location(location), None
-    except GeopyError:
-        return (
-            None,
-            "Geocoding service is currently unavailable. "
-            "Try again later or enter coordinates as 'lat,lon' within India.",
-        )
-    except Exception:
-        return (
-            None,
-            "Unable to validate location due to a network/proxy issue. "
-            "You can still enter coordinates as 'lat,lon' within India.",
-        )
+    return None, "Location not found in offline India index. Enter a valid place name or 'lat,lon'."
 
 
 def build_node_positions(coords_map: dict[str, tuple[float, float]]) -> dict[str, tuple[float, float]]:
     out: dict[str, tuple[float, float]] = {}
-    avg_lat = sum(lat for lat, _ in coords_map.values()) / len(coords_map)
-    avg_lon = sum(lon for _, lon in coords_map.values()) / len(coords_map)
+    if not coords_map:
+        return out
+    lats = [lat for lat, _ in coords_map.values()]
+    lons = [lon for _, lon in coords_map.values()]
+    min_lat, max_lat = min(lats), max(lats)
+    min_lon, max_lon = min(lons), max(lons)
+    lon_range = max(1e-9, max_lon - min_lon)
+    lat_range = max(1e-9, max_lat - min_lat)
+    width, height = 1100.0, 640.0
+    pad_x, pad_y = 70.0, 60.0
     for city, (lat, lon) in coords_map.items():
-        out[city] = ((lon - avg_lon) * 2200, -(lat - avg_lat) * 2200)
+        x = pad_x + ((lon - min_lon) / lon_range) * (width - 2 * pad_x) - width / 2
+        y = -(
+            pad_y + ((lat - min_lat) / lat_range) * (height - 2 * pad_y) - height / 2
+        )
+        out[city] = (x, y)
     return out
 
 
@@ -275,6 +252,66 @@ def build_graph(traffic: float) -> Graph:
     for c1, c2, d in roads:
         g.add_road(c1, c2, int(d * traffic))
     return g
+
+
+def graph_to_edge_list(g: Graph) -> list[tuple[str, str, int]]:
+    edges: list[tuple[str, str, int]] = []
+    seen = set()
+    for a in g.graph:
+        for b, w in g.graph[a]:
+            key = (a, b) if a <= b else (b, a)
+            if key in seen:
+                continue
+            seen.add(key)
+            edges.append((key[0], key[1], int(w)))
+    return edges
+
+
+def graph_from_edge_list(edges: list[tuple[str, str, int]]) -> Graph:
+    g = Graph()
+    for a, b, w in edges:
+        g.add_road(a, b, w)
+    return g
+
+
+def edge_weight(g: Graph, a: str, b: str) -> Optional[float]:
+    for n, w in g.graph.get(a, []):
+        if n == b:
+            return float(w)
+    return None
+
+
+def build_display_edge_distances(
+    g: Graph, coords_map: dict[str, tuple[float, float]], traffic: float
+) -> dict[tuple[str, str], float]:
+    out: dict[tuple[str, str], float] = {}
+    seen = set()
+    for a in g.graph:
+        for b, w in g.graph[a]:
+            key = (a, b) if a <= b else (b, a)
+            if key in seen:
+                continue
+            seen.add(key)
+            if a in coords_map and b in coords_map:
+                out[key] = geodesic(coords_map[a], coords_map[b]).km
+            else:
+                out[key] = float(w) / max(traffic, 1e-9)
+    return out
+
+
+def path_distance_km(
+    path_nodes: list[str], g: Graph, coords_map: dict[str, tuple[float, float]], traffic: float
+) -> float:
+    total = 0.0
+    for i in range(len(path_nodes) - 1):
+        a, b = path_nodes[i], path_nodes[i + 1]
+        if a in coords_map and b in coords_map:
+            total += geodesic(coords_map[a], coords_map[b]).km
+            continue
+        w = edge_weight(g, a, b)
+        if w is not None:
+            total += w / max(traffic, 1e-9)
+    return total
 
 
 # Clone graph safely so route experiments do not mutate the original.
@@ -390,9 +427,10 @@ def path_to_edges(path: list) -> list:
 
 
 # KPI payload shown in the top cards.
-def kpi_value(routes, fleet_size_session: int, speed_kmh: float = 40.0):
+def kpi_value(routes, display_distances, fleet_size_session: int, speed_kmh: float = 40.0):
     if routes and len(routes) > 0:
-        p0, d0 = routes[0]
+        p0 = routes[0][0]
+        d0 = display_distances[0] if display_distances and len(display_distances) > 0 else routes[0][1]
         est_h = d0 / speed_kmh if d0 is not None else 0.0
         return {
             "trucks": len(routes),
@@ -410,8 +448,9 @@ def kpi_value(routes, fleet_size_session: int, speed_kmh: float = 40.0):
 
 # Compute top-card values from current session state.
 rts0 = st.session_state.routes_result
+disp_d0 = st.session_state.display_route_distances
 f_sz = int(st.session_state.get("fleet_sz", 2))
-k0 = kpi_value(rts0, f_sz)
+k0 = kpi_value(rts0, disp_d0, f_sz)
 dist_s0 = f"{k0['dist']:.0f} km" if k0["dist"] is not None else "—"
 time_s0 = f"{k0['time_h']:.1f} h" if k0["time_h"] is not None else "—"
 stops_s0 = f"{k0['stops']}" if rts0 else "—"
@@ -470,7 +509,7 @@ with c_left:
     warehouse = st.selectbox("Warehouse", cities, index=0)
     source_input = st.text_input("Source", placeholder="Enter place name or lat,lon in India")
     destination_input = st.text_input("Destination", placeholder="Enter place name or lat,lon in India")
-    st.caption("If geocoding is unavailable, use coordinates like 23.3441,86.3397.")
+    st.caption("Place names are resolved using an offline India index. Coordinates also work.")
     st.caption("Recompute after changing traffic or locations.")
     run = st.button("Compute routes", type="primary", use_container_width=True)
     source = _normalize_city_name(source_input)
@@ -486,10 +525,14 @@ with c_left:
             st.error("Source and destination cannot be empty.")
             st.session_state.routes_result = None
             st.session_state.route_edges_list = None
+            st.session_state.display_route_distances = None
+            st.session_state.graph_edges_snapshot = None
         elif source == destination:
             st.error("Source and destination must differ.")
             st.session_state.routes_result = None
             st.session_state.route_edges_list = None
+            st.session_state.display_route_distances = None
+            st.session_state.graph_edges_snapshot = None
         else:
             if source_coords is None:
                 with st.spinner("Locating source..."):
@@ -498,11 +541,15 @@ with c_left:
                     st.error(source_geocode_error)
                     st.session_state.routes_result = None
                     st.session_state.route_edges_list = None
+                    st.session_state.display_route_distances = None
+                    st.session_state.graph_edges_snapshot = None
                     st.stop()
             if source_coords is None:
                 st.error("Invalid source location. Please enter a valid location in India.")
                 st.session_state.routes_result = None
                 st.session_state.route_edges_list = None
+                st.session_state.display_route_distances = None
+                st.session_state.graph_edges_snapshot = None
                 st.stop()
             if destination_coords is None:
                 with st.spinner("Locating destination..."):
@@ -511,11 +558,15 @@ with c_left:
                     st.error(destination_geocode_error)
                     st.session_state.routes_result = None
                     st.session_state.route_edges_list = None
+                    st.session_state.display_route_distances = None
+                    st.session_state.graph_edges_snapshot = None
                     st.stop()
             if destination_coords is None:
                 st.error("Invalid destination location. Please enter a valid location in India.")
                 st.session_state.routes_result = None
                 st.session_state.route_edges_list = None
+                st.session_state.display_route_distances = None
+                st.session_state.graph_edges_snapshot = None
                 st.stop()
             source_connected = True
             destination_connected = True
@@ -536,6 +587,8 @@ with c_left:
                 )
                 st.session_state.routes_result = None
                 st.session_state.route_edges_list = None
+                st.session_state.display_route_distances = None
+                st.session_state.graph_edges_snapshot = None
                 st.stop()
             if source_fallback_link or destination_fallback_link:
                 st.warning(
@@ -547,6 +600,8 @@ with c_left:
                 st.error("No valid route found between source and destination.")
                 st.session_state.routes_result = None
                 st.session_state.route_edges_list = None
+                st.session_state.display_route_distances = None
+                st.session_state.graph_edges_snapshot = None
             else:
                 # Warn when graph topology cannot provide enough unique paths.
                 if truck_count > 1 and len(routes) < truck_count:
@@ -556,7 +611,12 @@ with c_left:
                     )
                 st.session_state.routes_result = routes
                 st.session_state.route_edges_list = [path_to_edges(p) for p, _d in routes]
+                st.session_state.display_route_distances = [
+                    path_distance_km(p, g, city_coords, traffic) for p, _d in routes
+                ]
+                st.session_state.graph_edges_snapshot = graph_to_edge_list(g)
                 st.session_state.city_coords_map = city_coords
+                st.session_state.traffic_used = traffic
                 st.session_state.pending_sim = True
                 st.rerun()
 
@@ -566,6 +626,10 @@ if "city_coords_map" not in st.session_state:
 # Derived view state reused across middle and right panels.
 rts = st.session_state.routes_result
 el_list = st.session_state.route_edges_list
+display_distances = st.session_state.display_route_distances
+g_view = g
+if st.session_state.graph_edges_snapshot:
+    g_view = graph_from_edge_list(st.session_state.graph_edges_snapshot)
 n_r = len(rts) if rts else 0
 
 with c_mid:
@@ -605,13 +669,18 @@ with c_mid:
         sel_edges = None
         other_edges = None
     html_file = draw_graph(
-        g,
+        g_view,
         selected_route_edges=sel_edges,
         other_routes_edges=other_edges,
         source=source,
         destination=destination,
         warehouse=warehouse,
         node_positions=build_node_positions(st.session_state.get("city_coords_map", BASE_CITY_COORDS)),
+        edge_distances=build_display_edge_distances(
+            g_view,
+            st.session_state.get("city_coords_map", BASE_CITY_COORDS),
+            float(st.session_state.get("traffic_used", traffic)),
+        ),
         height=f"{MAP_IFRAME_HEIGHT}px",
     )
     with open(html_file, "r", encoding="utf-8") as f:
@@ -630,7 +699,12 @@ with c_right:
     st.divider()
     if rts and el_list:
         st.markdown("**Route comparison**", unsafe_allow_html=True)
-        for i, (path_nodes, d_km) in enumerate(rts):
+        for i, (path_nodes, d_cost) in enumerate(rts):
+            d_km = (
+                display_distances[i]
+                if display_distances and i < len(display_distances)
+                else float(d_cost)
+            )
             line = " → ".join(path_nodes)
             t_h = d_km / 40.0
             role = "Truck 1 (Best)" if i == 0 else f"Truck {i + 1} (Alternative)"

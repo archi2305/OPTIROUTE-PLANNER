@@ -20,6 +20,7 @@ def draw_graph(
     destination=None,
     warehouse=None,
     node_positions=None,
+    edge_distances=None,
     height="720px",
 ):
     # Build an interactive city network map.
@@ -99,7 +100,8 @@ def draw_graph(
                 continue
             seen_edges.add(ek)
 
-            w_km = int(weight) if float(weight) == int(weight) else weight
+            d_for_ui = edge_distances.get(ek, weight) if edge_distances else weight
+            w_km = int(round(d_for_ui))
             title = f"Distance: {w_km} km"
 
             if selected_route_edges and (ek in selected_keys):
