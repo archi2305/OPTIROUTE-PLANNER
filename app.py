@@ -1,9 +1,12 @@
 import time
+from difflib import get_close_matches
 from typing import Optional, Tuple
 
 import streamlit as st
 import streamlit.components.v1 as components
+import geonamescache
 from geopy.distance import geodesic
+from geopy.exc import GeopyError
 from geopy.geocoders import Nominatim
 
 from algorithms.dijkstra import dijkstra, get_path
@@ -97,6 +100,82 @@ def _normalize_city_name(name: str) -> str:
     return " ".join(part for part in name.strip().split())
 
 
+def _parse_lat_lon_input(value: str) -> Optional[Tuple[float, float]]:
+    txt = value.strip()
+    if "," not in txt:
+        return None
+    parts = [p.strip() for p in txt.split(",")]
+    if len(parts) != 2:
+        return None
+    try:
+        lat = float(parts[0])
+        lon = float(parts[1])
+    except ValueError:
+        return None
+    if not (
+        INDIA_BOUNDS["min_lat"] <= lat <= INDIA_BOUNDS["max_lat"]
+        and INDIA_BOUNDS["min_lon"] <= lon <= INDIA_BOUNDS["max_lon"]
+    ):
+        return None
+    return (lat, lon)
+
+
+def _looks_like_partial_coordinate(value: str) -> bool:
+    txt = value.strip().lower()
+    if not txt:
+        return False
+    if "," in txt:
+        return False
+    if txt in {"lat", "lon", "latitude", "longitude"}:
+        return True
+    allowed = set("0123456789.-+ ")
+    return all(ch in allowed for ch in txt)
+
+
+@st.cache_data(show_spinner=False)
+def build_india_location_index() -> tuple[dict[str, tuple[float, float]], list[str]]:
+    gc = geonamescache.GeonamesCache()
+    cities = gc.get_cities()
+    names_to_coords: dict[str, tuple[float, float]] = {}
+    for city in cities.values():
+        if city.get("countrycode") != "IN":
+            continue
+        try:
+            lat = float(city["latitude"])
+            lon = float(city["longitude"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        if not (
+            INDIA_BOUNDS["min_lat"] <= lat <= INDIA_BOUNDS["max_lat"]
+            and INDIA_BOUNDS["min_lon"] <= lon <= INDIA_BOUNDS["max_lon"]
+        ):
+            continue
+        canonical = _normalize_city_name(str(city.get("name", ""))).lower()
+        if canonical and canonical not in names_to_coords:
+            names_to_coords[canonical] = (lat, lon)
+        for alt in city.get("alternatenames", []):
+            alias = _normalize_city_name(str(alt)).lower()
+            if alias and alias not in names_to_coords:
+                names_to_coords[alias] = (lat, lon)
+    for base_name, base_coords in BASE_CITY_COORDS.items():
+        names_to_coords.setdefault(base_name.lower(), base_coords)
+    return names_to_coords, list(names_to_coords.keys())
+
+
+def geocode_from_offline_india_index(location: str) -> Optional[Tuple[float, float]]:
+    query = _normalize_city_name(location).lower()
+    if not query:
+        return None
+    names_to_coords, keys = build_india_location_index()
+    exact = names_to_coords.get(query)
+    if exact is not None:
+        return exact
+    near = get_close_matches(query, keys, n=1, cutoff=0.86)
+    if near:
+        return names_to_coords.get(near[0])
+    return None
+
+
 @st.cache_resource(show_spinner=False)
 def get_geolocator() -> Nominatim:
     return Nominatim(user_agent="optiroute_planner_app")
@@ -116,6 +195,31 @@ def geocode_india_location(location: str) -> Optional[Tuple[float, float]]:
     return (loc.latitude, loc.longitude)
 
 
+def safe_geocode_india_location(location: str) -> tuple[Optional[Tuple[float, float]], Optional[str]]:
+    lat_lon = _parse_lat_lon_input(location)
+    if lat_lon is not None:
+        return lat_lon, None
+    if _looks_like_partial_coordinate(location):
+        return None, "Enter full coordinates as 'lat,lon' (example: 23.3441,86.3397)."
+    offline_coords = geocode_from_offline_india_index(location)
+    if offline_coords is not None:
+        return offline_coords, None
+    try:
+        return geocode_india_location(location), None
+    except GeopyError:
+        return (
+            None,
+            "Geocoding service is currently unavailable. "
+            "Try again later or enter coordinates as 'lat,lon' within India.",
+        )
+    except Exception:
+        return (
+            None,
+            "Unable to validate location due to a network/proxy issue. "
+            "You can still enter coordinates as 'lat,lon' within India.",
+        )
+
+
 def build_node_positions(coords_map: dict[str, tuple[float, float]]) -> dict[str, tuple[float, float]]:
     out: dict[str, tuple[float, float]] = {}
     avg_lat = sum(lat for lat, _ in coords_map.values()) / len(coords_map)
@@ -132,19 +236,29 @@ def extend_graph_with_location(
     location_coords: tuple[float, float],
     traffic: float,
     threshold_km: float = NEARBY_CONNECTION_THRESHOLD_KM,
-) -> bool:
+) -> tuple[bool, bool]:
     if location_name not in g.graph:
         g.add_location(location_name)
     coords_map[location_name] = location_coords
     connected = False
+    nearest_city = None
+    nearest_distance = float("inf")
     for city, city_coords in coords_map.items():
         if city == location_name:
             continue
         dist_km = geodesic(location_coords, city_coords).km
+        if dist_km < nearest_distance:
+            nearest_distance = dist_km
+            nearest_city = city
         if dist_km <= threshold_km:
             g.add_road(location_name, city, max(1, int(round(dist_km * traffic))))
             connected = True
-    return connected
+    if connected:
+        return True, False
+    if nearest_city is None:
+        return False, False
+    g.add_road(location_name, nearest_city, max(1, int(round(nearest_distance * traffic))))
+    return True, True
 
 # Build a weighted city graph; traffic scales all road costs.
 def build_graph(traffic: float) -> Graph:
@@ -354,8 +468,9 @@ with c_left:
     )
     st.markdown("**Locations**", unsafe_allow_html=True)
     warehouse = st.selectbox("Warehouse", cities, index=0)
-    source_input = st.text_input("Source", placeholder="Enter source location in India")
-    destination_input = st.text_input("Destination", placeholder="Enter destination location in India")
+    source_input = st.text_input("Source", placeholder="Enter place name or lat,lon in India")
+    destination_input = st.text_input("Destination", placeholder="Enter place name or lat,lon in India")
+    st.caption("If geocoding is unavailable, use coordinates like 23.3441,86.3397.")
     st.caption("Recompute after changing traffic or locations.")
     run = st.button("Compute routes", type="primary", use_container_width=True)
     source = _normalize_city_name(source_input)
@@ -378,7 +493,12 @@ with c_left:
         else:
             if source_coords is None:
                 with st.spinner("Locating source..."):
-                    source_coords = geocode_india_location(source)
+                    source_coords, source_geocode_error = safe_geocode_india_location(source)
+                if source_geocode_error:
+                    st.error(source_geocode_error)
+                    st.session_state.routes_result = None
+                    st.session_state.route_edges_list = None
+                    st.stop()
             if source_coords is None:
                 st.error("Invalid source location. Please enter a valid location in India.")
                 st.session_state.routes_result = None
@@ -386,7 +506,12 @@ with c_left:
                 st.stop()
             if destination_coords is None:
                 with st.spinner("Locating destination..."):
-                    destination_coords = geocode_india_location(destination)
+                    destination_coords, destination_geocode_error = safe_geocode_india_location(destination)
+                if destination_geocode_error:
+                    st.error(destination_geocode_error)
+                    st.session_state.routes_result = None
+                    st.session_state.route_edges_list = None
+                    st.stop()
             if destination_coords is None:
                 st.error("Invalid destination location. Please enter a valid location in India.")
                 st.session_state.routes_result = None
@@ -394,10 +519,16 @@ with c_left:
                 st.stop()
             source_connected = True
             destination_connected = True
+            source_fallback_link = False
+            destination_fallback_link = False
             if source not in BASE_CITY_COORDS:
-                source_connected = extend_graph_with_location(g, city_coords, source, source_coords, traffic)
+                source_connected, source_fallback_link = extend_graph_with_location(
+                    g, city_coords, source, source_coords, traffic
+                )
             if destination not in BASE_CITY_COORDS:
-                destination_connected = extend_graph_with_location(g, city_coords, destination, destination_coords, traffic)
+                destination_connected, destination_fallback_link = extend_graph_with_location(
+                    g, city_coords, destination, destination_coords, traffic
+                )
             if not source_connected or not destination_connected:
                 st.error(
                     "Could not connect one or more entered locations to nearby cities. "
@@ -406,6 +537,11 @@ with c_left:
                 st.session_state.routes_result = None
                 st.session_state.route_edges_list = None
                 st.stop()
+            if source_fallback_link or destination_fallback_link:
+                st.warning(
+                    "One or more locations were linked via the nearest city because no city was found within "
+                    f"{int(NEARBY_CONNECTION_THRESHOLD_KM)} km."
+                )
             routes = compute_fleet_routes(g, source, destination, truck_count)
             if not routes:
                 st.error("No valid route found between source and destination.")
