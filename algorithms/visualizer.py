@@ -19,6 +19,7 @@ def draw_graph(
     source=None,
     destination=None,
     warehouse=None,
+    node_positions=None,
     height="720px",
 ):
     # Build an interactive city network map.
@@ -37,8 +38,7 @@ def draw_graph(
         other_keys |= s
     other_keys -= selected_keys
 
-    # Fixed coordinates keep the map layout stable across reruns.
-    positions = {
+    default_positions = {
         "Delhi": (0, 0),
         "Noida": (200, 0),
         "Ghaziabad": (350, 50),
@@ -46,15 +46,17 @@ def draw_graph(
         "Gurgaon": (-150, -120),
         "Faridabad": (150, -120),
     }
+    positions = dict(default_positions)
+    if node_positions:
+        positions.update(node_positions)
 
     c_wh = "#f97316"
     c_src = "#22c55e"
     c_dst = "#a855f7"
     c_neutral = "#7dd3fc"
 
-    for city, (x, y) in positions.items():
-        if city not in g.graph:
-            continue
+    for city in g.graph:
+        x, y = positions.get(city, (0, 0))
 
         border = "#1e3a5f"
         bg = c_neutral

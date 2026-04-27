@@ -3,6 +3,8 @@ from typing import Optional, Tuple
 
 import streamlit as st
 import streamlit.components.v1 as components
+from geopy.distance import geodesic
+from geopy.geocoders import Nominatim
 
 from algorithms.dijkstra import dijkstra, get_path
 from algorithms.graph import Graph
@@ -79,6 +81,70 @@ st.markdown(
 
 
 MAP_IFRAME_HEIGHT = 560
+INDIA_BOUNDS = {"min_lat": 6.0, "max_lat": 38.5, "min_lon": 68.0, "max_lon": 97.5}
+NEARBY_CONNECTION_THRESHOLD_KM = 300.0
+BASE_CITY_COORDS = {
+    "Delhi": (28.6139, 77.2090),
+    "Noida": (28.5355, 77.3910),
+    "Ghaziabad": (28.6692, 77.4538),
+    "Meerut": (28.9845, 77.7064),
+    "Gurgaon": (28.4595, 77.0266),
+    "Faridabad": (28.4089, 77.3178),
+}
+
+
+def _normalize_city_name(name: str) -> str:
+    return " ".join(part for part in name.strip().split())
+
+
+@st.cache_resource(show_spinner=False)
+def get_geolocator() -> Nominatim:
+    return Nominatim(user_agent="optiroute_planner_app")
+
+
+@st.cache_data(show_spinner=False)
+def geocode_india_location(location: str) -> Optional[Tuple[float, float]]:
+    geolocator = get_geolocator()
+    loc = geolocator.geocode(f"{location}, India", exactly_one=True, timeout=10)
+    if loc is None:
+        return None
+    if not (
+        INDIA_BOUNDS["min_lat"] <= loc.latitude <= INDIA_BOUNDS["max_lat"]
+        and INDIA_BOUNDS["min_lon"] <= loc.longitude <= INDIA_BOUNDS["max_lon"]
+    ):
+        return None
+    return (loc.latitude, loc.longitude)
+
+
+def build_node_positions(coords_map: dict[str, tuple[float, float]]) -> dict[str, tuple[float, float]]:
+    out: dict[str, tuple[float, float]] = {}
+    avg_lat = sum(lat for lat, _ in coords_map.values()) / len(coords_map)
+    avg_lon = sum(lon for _, lon in coords_map.values()) / len(coords_map)
+    for city, (lat, lon) in coords_map.items():
+        out[city] = ((lon - avg_lon) * 2200, -(lat - avg_lat) * 2200)
+    return out
+
+
+def extend_graph_with_location(
+    g: Graph,
+    coords_map: dict[str, tuple[float, float]],
+    location_name: str,
+    location_coords: tuple[float, float],
+    traffic: float,
+    threshold_km: float = NEARBY_CONNECTION_THRESHOLD_KM,
+) -> bool:
+    if location_name not in g.graph:
+        g.add_location(location_name)
+    coords_map[location_name] = location_coords
+    connected = False
+    for city, city_coords in coords_map.items():
+        if city == location_name:
+            continue
+        dist_km = geodesic(location_coords, city_coords).km
+        if dist_km <= threshold_km:
+            g.add_road(location_name, city, max(1, int(round(dist_km * traffic))))
+            connected = True
+    return connected
 
 # Build a weighted city graph; traffic scales all road costs.
 def build_graph(traffic: float) -> Graph:
@@ -288,19 +354,58 @@ with c_left:
     )
     st.markdown("**Locations**", unsafe_allow_html=True)
     warehouse = st.selectbox("Warehouse", cities, index=0)
-    source = st.selectbox("Source", cities, index=0)
-    destination = st.selectbox("Destination", cities, index=1 if len(cities) > 1 else 0)
+    source_input = st.text_input("Source", placeholder="Enter source location in India")
+    destination_input = st.text_input("Destination", placeholder="Enter destination location in India")
     st.caption("Recompute after changing traffic or locations.")
     run = st.button("Compute routes", type="primary", use_container_width=True)
+    source = _normalize_city_name(source_input)
+    destination = _normalize_city_name(destination_input)
+    city_coords = dict(BASE_CITY_COORDS)
+    source_coords: Optional[Tuple[float, float]] = BASE_CITY_COORDS.get(source)
+    destination_coords: Optional[Tuple[float, float]] = BASE_CITY_COORDS.get(destination)
     if run:
         # Reset simulation flags for a fresh run.
         st.session_state.pending_sim = False
         st.session_state.replay_sim = False
-        if source == destination:
+        if not source or not destination:
+            st.error("Source and destination cannot be empty.")
+            st.session_state.routes_result = None
+            st.session_state.route_edges_list = None
+        elif source == destination:
             st.error("Source and destination must differ.")
             st.session_state.routes_result = None
             st.session_state.route_edges_list = None
         else:
+            if source_coords is None:
+                with st.spinner("Locating source..."):
+                    source_coords = geocode_india_location(source)
+            if source_coords is None:
+                st.error("Invalid source location. Please enter a valid location in India.")
+                st.session_state.routes_result = None
+                st.session_state.route_edges_list = None
+                st.stop()
+            if destination_coords is None:
+                with st.spinner("Locating destination..."):
+                    destination_coords = geocode_india_location(destination)
+            if destination_coords is None:
+                st.error("Invalid destination location. Please enter a valid location in India.")
+                st.session_state.routes_result = None
+                st.session_state.route_edges_list = None
+                st.stop()
+            source_connected = True
+            destination_connected = True
+            if source not in BASE_CITY_COORDS:
+                source_connected = extend_graph_with_location(g, city_coords, source, source_coords, traffic)
+            if destination not in BASE_CITY_COORDS:
+                destination_connected = extend_graph_with_location(g, city_coords, destination, destination_coords, traffic)
+            if not source_connected or not destination_connected:
+                st.error(
+                    "Could not connect one or more entered locations to nearby cities. "
+                    "Try a location closer to the NCR network."
+                )
+                st.session_state.routes_result = None
+                st.session_state.route_edges_list = None
+                st.stop()
             routes = compute_fleet_routes(g, source, destination, truck_count)
             if not routes:
                 st.error("No valid route found between source and destination.")
@@ -315,8 +420,12 @@ with c_left:
                     )
                 st.session_state.routes_result = routes
                 st.session_state.route_edges_list = [path_to_edges(p) for p, _d in routes]
+                st.session_state.city_coords_map = city_coords
                 st.session_state.pending_sim = True
                 st.rerun()
+
+if "city_coords_map" not in st.session_state:
+    st.session_state.city_coords_map = dict(BASE_CITY_COORDS)
 
 # Derived view state reused across middle and right panels.
 rts = st.session_state.routes_result
@@ -366,6 +475,7 @@ with c_mid:
         source=source,
         destination=destination,
         warehouse=warehouse,
+        node_positions=build_node_positions(st.session_state.get("city_coords_map", BASE_CITY_COORDS)),
         height=f"{MAP_IFRAME_HEIGHT}px",
     )
     with open(html_file, "r", encoding="utf-8") as f:
